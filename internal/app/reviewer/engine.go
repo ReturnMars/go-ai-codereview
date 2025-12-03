@@ -26,16 +26,21 @@ type Result struct {
 type Engine struct {
 	client      *llm.Client
 	concurrency int
+	level       int // 审查严格级别 1-6
 }
 
 // NewEngine creates a new review engine
-func NewEngine(client *llm.Client, concurrency int) *Engine {
+func NewEngine(client *llm.Client, concurrency int, level int) *Engine {
 	if concurrency <= 0 {
 		concurrency = 1
+	}
+	if level < 1 || level > 6 {
+		level = 3 // 默认标准模式
 	}
 	return &Engine{
 		client:      client,
 		concurrency: concurrency,
+		level:       level,
 	}
 }
 
@@ -100,7 +105,7 @@ func (e *Engine) worker(ctx context.Context, jobs <-chan Job, results chan<- Res
 		// In production, use a token bucket or rate.Limiter
 		// time.Sleep(100 * time.Millisecond)
 
-		review, err := e.client.ReviewCode(ctx, job.FilePath, job.Content)
+		review, err := e.client.ReviewCode(ctx, job.FilePath, job.Content, e.level)
 		results <- Result{
 			FilePath: job.FilePath,
 			Review:   review,

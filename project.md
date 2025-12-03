@@ -1,13 +1,41 @@
 # Project Implementation Log
 
 ## Status Overview
-- **Phase:** MVP Complete / Maintenance
-- **Current State:** Fully functional CLI tool with TUI and Reporting.
-- **Last Update:** Phase 4 - TUI & Final Polish
+- **Phase:** Production / Maintenance
+- **Current State:** Feature-complete CLI with strictness levels, batch mode, and smart path resolution.
+- **Last Update:** Phase 5.3 - Strictness Level & Path Resolution
 
 ---
 
 ## Implementation History
+
+### [Date] Phase 5.3: Strictness Level & Path Resolution
+- **Action:** Fixed `run .` generating report name as "." instead of actual directory name.
+- **Action:** Added `resolveDirectoryName()` for smart path-to-name conversion.
+- **Action:** Added strictness level display in generated Markdown reports.
+- **Action:** Updated README with batch mode level specification examples.
+- **Usage:** Batch mode uses positional args for per-path levels: `path level path level`
+
+### [Date] Phase 5.2: Strictness Level Feature
+- **Action:** Implemented `--l` flag for review strictness level (1-6).
+- **Action:** Modified LLM Prompt to adjust review standards based on level.
+- **Action:** Updated Engine to pass level to ReviewCode.
+- **Action:** Added level support to batch mode (per-path level specification).
+- **Levels:**
+  - Level 1: 宽松模式 - 只关注严重问题
+  - Level 3: 标准模式 - 常规审查标准 (默认)
+  - Level 6: 极致模式 - 顶级开源项目标准
+
+### [Date] Phase 5.1: CLI Enhancements
+- **Action:** Implemented `--report-name` flag for custom report filenames.
+- **Action:** Added `--rn` alias for convenience.
+- **Action:** Verified global configuration (`~/.code-review.yaml`) for cross-project usage.
+- **Action:** Verified `go install` and `PATH` execution.
+
+### [Date] Phase 5: Build & Release
+- **Action:** Created `.goreleaser.yaml` configuration.
+- **Action:** Executed `goreleaser build --snapshot --clean` successfully.
+- **Output:** Cross-platform binaries available in `dist/` folder.
 
 ### [Date] Phase 4: TUI & Final Polish
 - **Action:** Created `internal/ui` package with Bubbletea Model.

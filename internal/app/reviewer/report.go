@@ -4,13 +4,26 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 )
 
 // GenerateMarkdownReport 生成 Markdown 格式的审查报告
-func GenerateMarkdownReport(results []Result, duration time.Duration, outputDir string) (string, error) {
-	timestamp := time.Now().Format("20060102-150405")
-	reportFileName := fmt.Sprintf("review_report_%s.md", timestamp)
+func GenerateMarkdownReport(results []Result, duration time.Duration, outputDir, customName string, level int) (string, error) {
+	var reportFileName string
+	if customName != "" {
+		// 如果用户指定了名称，确保它是 markdown 后缀
+		if filepath.Ext(customName) != ".md" {
+			customName += ".md"
+		}
+		reportFileName = customName
+	} else {
+		// 默认使用时间戳命名
+		timestamp := time.Now().Format("20060102-150405")
+		reportFileName = fmt.Sprintf("review_report_%s.md", timestamp)
+	}
+
 	reportPath := filepath.Join(outputDir, reportFileName)
 
 	// 确保目录存在
@@ -43,14 +56,35 @@ func GenerateMarkdownReport(results []Result, duration time.Duration, outputDir 
 	}
 
 	// 写入报告头
-	fmt.Fprintf(f, "# 代码审查报告 (AI Powered)\n\n")
+	displayName := reportFileName
+	if customName != "" {
+		displayName = customName // 如果是用户指定的，直接用名字，或者去掉 .md
+		displayName = strings.TrimSuffix(displayName, ".md")
+	}
+
+	fmt.Fprintf(f, "# 代码审查报告: %s\n\n", displayName)
 	fmt.Fprintf(f, "## 📊 项目概览\n\n")
-	fmt.Fprintf(f, "- **项目综合评分:** %.1f / 100\n", finalScore)
+	// 尝试用 HTML 标签加大字体 (Markdown 支持 HTML)
+	fmt.Fprintf(f, "### 🏆 <span style='font-size:24px'>项目综合评分: %.1f / 100</span>\n\n", finalScore)
+
+	fmt.Fprintf(f, "- **审查级别:** %d/6 (%s)\n", level, getLevelName(level))
 	fmt.Fprintf(f, "- **生成时间:** %s\n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(f, "- **耗时:** %s\n", duration.Round(time.Millisecond))
 	fmt.Fprintf(f, "- **文件总数:** %d (有效分析: %d)\n\n", len(results), validFiles)
 
 	fmt.Fprintf(f, "---\n\n")
+
+	// 按重要性分数降序排序
+	sort.Slice(results, func(i, j int) bool {
+		// 处理 Error 或 Review 为 nil 的情况，将它们排在最后
+		if results[i].Error != nil || results[i].Review == nil {
+			return false
+		}
+		if results[j].Error != nil || results[j].Review == nil {
+			return true
+		}
+		return results[i].Review.Importance > results[j].Review.Importance
+	})
 
 	// 写入详细结果
 	for _, res := range results {
@@ -99,4 +133,20 @@ func GenerateMarkdownReport(results []Result, duration time.Duration, outputDir 
 	}
 
 	return reportPath, nil
+}
+
+// getLevelName 返回级别对应的中文名称
+func getLevelName(level int) string {
+	names := map[int]string{
+		1: "宽松模式",
+		2: "基础模式",
+		3: "标准模式",
+		4: "严格模式",
+		5: "专业模式",
+		6: "极致模式",
+	}
+	if name, ok := names[level]; ok {
+		return name
+	}
+	return "标准模式"
 }
