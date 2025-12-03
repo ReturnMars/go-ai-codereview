@@ -1,0 +1,5 @@
+api_key: "sk-48e33c7ace614b7f979b7ff92f3cff88"
+model: "deepseek-chat"
+base_url: "https://api.deepseek.com"
+concurrency: 5
+include_exts: [".go", ".js"]

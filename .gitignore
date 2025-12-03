@@ -1,0 +1,14 @@
+/reports
+/bin
+/dist
+/build
+/release
+/target
+/tmp
+/cache
+/logs
+/errors
+/warnings
+/info
+/debug
+/trace
