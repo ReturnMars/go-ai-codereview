@@ -1,3 +1,4 @@
+// Package ui 提供终端用户界面组件
 package ui
 
 import (
@@ -11,21 +12,29 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var (
-	// Styles
-	currentPkgStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("211"))
-	doneStyle       = lipgloss.NewStyle().Margin(1, 2)
-	checkMark       = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).SetString("✓")
+// 常量定义
+const (
+	DefaultTerminalWidth = 80 // 默认终端宽度
+	ProgressBarWidth     = 40 // 进度条宽度
 )
 
-type ProgressMsg float64
+// 样式定义
+var (
+	currentFileStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("211"))
+	doneStyle        = lipgloss.NewStyle().Margin(1, 2)
+)
+
+// CurrentFileMsg 表示当前正在处理的文件
 type CurrentFileMsg string
+
+// DoneMsg 表示审查完成的消息
 type DoneMsg struct {
 	Duration    time.Duration
 	ReportPath  string
 	IssuesCount int
 }
 
+// Model 是 TUI 的状态模型
 type Model struct {
 	spinner     spinner.Model
 	progress    progress.Model
@@ -36,15 +45,18 @@ type Model struct {
 	reportPath  string
 	duration    time.Duration
 	issuesCount int
-	err         error
 }
 
+// NewModel 创建一个新的 TUI 模型
 func NewModel(totalFiles int) Model {
+	// 初始化进度条
 	p := progress.New(
 		progress.WithDefaultGradient(),
-		progress.WithWidth(40),
+		progress.WithWidth(ProgressBarWidth),
 		progress.WithoutPercentage(),
 	)
+
+	// 初始化 Spinner
 	s := spinner.New()
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
 	s.Spinner = spinner.Dot
@@ -56,13 +68,16 @@ func NewModel(totalFiles int) Model {
 	}
 }
 
+// Init 实现 tea.Model 接口，返回初始命令
 func (m Model) Init() tea.Cmd {
 	return m.spinner.Tick
 }
 
+// Update 实现 tea.Model 接口，处理消息并更新状态
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// 任意按键退出
 		return m, tea.Quit
 
 	case spinner.TickMsg:
@@ -71,25 +86,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case progress.FrameMsg:
-		newModel, cmd := m.progress.Update(msg)
-		if newModel, ok := newModel.(progress.Model); ok {
-			m.progress = newModel
+		progressModel, cmd := m.progress.Update(msg)
+		if pm, ok := progressModel.(progress.Model); ok {
+			m.progress = pm
 		}
-		return m, cmd
-
-	case ProgressMsg:
-		if m.progress.Percent() == 1.0 {
-			return m, nil
-		}
-		cmd := m.progress.SetPercent(float64(msg))
 		return m, cmd
 
 	case CurrentFileMsg:
 		m.currentFile = string(msg)
 		m.completed++
-		// Calculate percentage
-		pct := float64(m.completed) / float64(m.total)
-		return m, m.progress.SetPercent(pct)
+		// 计算进度百分比（防止除零）
+		if m.total > 0 {
+			pct := float64(m.completed) / float64(m.total)
+			return m, m.progress.SetPercent(pct)
+		}
+		return m, nil
 
 	case DoneMsg:
 		m.done = true
@@ -97,34 +108,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.reportPath = msg.ReportPath
 		m.issuesCount = msg.IssuesCount
 		return m, tea.Quit
-	}
 
-	return m, nil
+	default:
+		return m, nil
+	}
 }
 
+// View 实现 tea.Model 接口，渲染界面
 func (m Model) View() string {
+	// 完成状态
 	if m.done {
 		return doneStyle.Render(fmt.Sprintf(
-			"✨ 审查完成! 耗时 %s\n发现问题: %d 个\n报告已生成: %s\n",
+			"✨ 审查完成！耗时 %s\n📋 发现问题: %d 个\n📄 报告路径: %s\n",
 			m.duration.Round(time.Millisecond),
 			m.issuesCount,
 			m.reportPath,
 		))
 	}
 
+	// 处理中状态
 	spin := m.spinner.View() + " "
 	prog := m.progress.View()
-	cellsAvail := 80 // maximum width
 
-	pkgName := currentPkgStyle.Render(m.currentFile)
-	info := lipgloss.NewStyle().MaxWidth(cellsAvail).Render("正在分析: " + pkgName)
+	fileName := currentFileStyle.Render(m.currentFile)
+	info := lipgloss.NewStyle().MaxWidth(DefaultTerminalWidth).Render("正在分析: " + fileName)
 
+	// 构建显示块
 	blocks := []string{
-		fmt.Sprintf("\n %s %s\n", spin, info),
+		fmt.Sprintf("\n %s%s\n", spin, info),
 		prog,
-		fmt.Sprintf("%d/%d files processed\n", m.completed, m.total),
+		fmt.Sprintf("已处理: %d/%d 个文件\n", m.completed, m.total),
 	}
 
 	return strings.Join(blocks, "\n")
 }
-

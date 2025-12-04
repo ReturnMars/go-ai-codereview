@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"go-ai-reviewer/internal/app/reviewer"
@@ -15,163 +17,297 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
+// 常量定义
+const (
+	defaultConcurrency = 5
+	defaultLevel       = 3
+	minLevel           = 1
+	maxLevel           = 6
+)
+
+// ReviewTask 表示一个待审查的任务
 type ReviewTask struct {
 	Path       string
 	ReportName string
-	Level      int // 审查严格级别 1-6
+	Level      int
 }
 
-var (
-	runCmd = &cobra.Command{
-		Use:   "run [path] [project_name] ...",
-		Short: "Start code review for specified directories",
-		Long: `Scans the directory, filters files based on rules, and sends them for AI analysis.
-Supports batch mode: reviewer run path1 proj1 path2 proj2`,
-		// Allow arbitrary arguments for batch mode
-		Args: cobra.MinimumNArgs(0),
-		Run: func(cmd *cobra.Command, args []string) {
-			var tasks []ReviewTask
+// runCmd 是 run 子命令的定义
+var runCmd = &cobra.Command{
+	Use:   "run [path] [level] [name] ...",
+	Short: "启动代码审查",
+	Long: `扫描指定目录，根据规则过滤文件，并发送给 AI 进行分析。
+支持批量模式: reviewer run ./path1 5 report1 ./path2 3 report2`,
+	Args: cobra.MinimumNArgs(0),
+	Run:  executeRun,
+}
 
-			// 获取全局默认级别
-			defaultLevel := viper.GetInt("level")
-			if defaultLevel < 1 || defaultLevel > 6 {
-				defaultLevel = 3 // 默认中等严格
-			}
-
-			// Parse arguments into tasks
-			if len(args) == 0 {
-				// No args: default to current directory
-				rn := viper.GetString("report_name")
-				if rn == "" {
-					rn, _ = cmd.Flags().GetString("rn")
-				}
-				// 如果没有指定报告名，使用当前目录的实际名称
-				if rn == "" {
-					rn = resolveDirectoryName(".")
-				}
-				tasks = append(tasks, ReviewTask{Path: ".", ReportName: rn, Level: defaultLevel})
-			} else if len(args) == 1 {
-				// Single path mode
-				targetDir := args[0]
-				rn := viper.GetString("report_name")
-				if rn == "" {
-					rn, _ = cmd.Flags().GetString("rn")
-				}
-				// 如果没有指定报告名，使用目录的实际名称
-				if rn == "" {
-					rn = resolveDirectoryName(targetDir)
-				}
-				tasks = append(tasks, ReviewTask{Path: targetDir, ReportName: rn, Level: defaultLevel})
-			} else {
-				// Multi-path mode: smart parsing
-				// Format: path [level] [reportName] path [level] [reportName] ...
-				i := 0
-				for i < len(args) {
-					path := args[i]
-					reportName := ""
-					level := defaultLevel
-					i++
-
-					// Parse optional level and reportName after path
-					for i < len(args) && !isDirectory(args[i]) {
-						arg := args[i]
-						// Check if it's a level (1-6)
-						if lvl, err := strconv.Atoi(arg); err == nil && lvl >= 1 && lvl <= 6 {
-							level = lvl
-						} else {
-							// It's a report name
-							reportName = arg
-						}
-						i++
-					}
-
-					// 如果没有指定报告名，使用目录的实际名称
-					if reportName == "" {
-						reportName = resolveDirectoryName(path)
-					}
-
-					tasks = append(tasks, ReviewTask{Path: path, ReportName: reportName, Level: level})
-				}
-			}
-
-			// Validate Config
-			apiKey := viper.GetString("api_key")
-			if apiKey == "" {
-				fmt.Fprintln(os.Stderr, "❌ Error: OPENAI_API_KEY is not set. Please set it in env or config file.")
-				os.Exit(1)
-			}
-
-			// Execute tasks sequentially
-			for i, task := range tasks {
-				if len(tasks) > 1 {
-					fmt.Printf("\n🚀 Starting Batch Task (%d/%d): %s (Level: %d)\n", i+1, len(tasks), task.ReportName, task.Level)
-				}
-				if err := runReviewTask(task.Path, task.ReportName, task.Level); err != nil {
-					fmt.Fprintf(os.Stderr, "❌ Task failed for %s: %v\n", task.Path, err)
-					// Continue to next task instead of exiting?
-					// os.Exit(1)
-				}
-			}
-		},
+// executeRun 是 run 命令的主执行函数
+func executeRun(cmd *cobra.Command, args []string) {
+	// 1. 前置配置校验
+	if err := validateConfig(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ 配置错误: %v\n", err)
+		os.Exit(1)
 	}
-)
 
-func runReviewTask(targetDir, reportName string, level int) error {
-	// 1. Configuration
-	includeExts := viper.GetStringSlice("include_exts")
+	// 2. 解析任务列表
+	tasks := parseTasksFromArgs(cmd, args)
+	if len(tasks) == 0 {
+		fmt.Fprintln(os.Stderr, "❌ 没有可执行的任务")
+		os.Exit(1)
+	}
+
+	// 3. 创建全局 context（只创建一次，避免信号处理泄漏）
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// 4. 顺序执行任务
+	for i, task := range tasks {
+		// 检查是否已被用户中断
+		if ctx.Err() != nil {
+			fmt.Println("\n🛑 审查已被用户中断")
+			os.Exit(130)
+		}
+
+		if len(tasks) > 1 {
+			fmt.Printf("\n🚀 批量任务 (%d/%d): %s (级别: %d)\n", i+1, len(tasks), task.ReportName, task.Level)
+		}
+
+		if err := runReviewTask(ctx, task); err != nil {
+			fmt.Fprintf(os.Stderr, "\n❌ 任务失败 [%s]: %v\n", task.Path, err)
+			// 如果是用户中断，立即退出
+			if ctx.Err() != nil {
+				fmt.Println("🛑 审查已被用户中断")
+				os.Exit(130)
+			}
+			// 否则继续下一个任务
+		}
+	}
+}
+
+// validateConfig 校验必要的配置项
+func validateConfig() error {
 	apiKey := viper.GetString("api_key")
-	model := viper.GetString("model")
-	baseURL := viper.GetString("base_url")
-	concurrency := viper.GetInt("concurrency")
-	if concurrency <= 0 {
-		concurrency = 5
+	if apiKey == "" {
+		return fmt.Errorf("API Key 未设置，请通过环境变量或配置文件设置 OPENAI_API_KEY")
+	}
+	return nil
+}
+
+// parseTasksFromArgs 从命令行参数解析任务列表
+func parseTasksFromArgs(cmd *cobra.Command, args []string) []ReviewTask {
+	defaultLvl := getValidLevel(viper.GetInt("level"))
+
+	// 无参数：默认当前目录
+	if len(args) == 0 {
+		reportName := getReportName(cmd, ".")
+		return []ReviewTask{{Path: ".", ReportName: reportName, Level: defaultLvl}}
 	}
 
-	// 2. Initialize Scanner
-	scn, err := scanner.NewScanner(targetDir, includeExts)
+	// 单参数：单个目录
+	if len(args) == 1 {
+		reportName := getReportName(cmd, args[0])
+		return []ReviewTask{{Path: args[0], ReportName: reportName, Level: defaultLvl}}
+	}
+
+	// 多参数：批量模式解析
+	return parseMultiPathArgs(args, defaultLvl)
+}
+
+// taskParseResult 表示单个任务解析结果
+type taskParseResult struct {
+	task     ReviewTask
+	consumed int // 消耗的参数数量
+}
+
+// parseMultiPathArgs 解析批量模式参数
+// 格式: path [level] [reportName] path [level] [reportName] ...
+func parseMultiPathArgs(args []string, defaultLvl int) []ReviewTask {
+	var tasks []ReviewTask
+
+	for i := 0; i < len(args); {
+		result := parseSingleTask(args[i:], defaultLvl)
+		tasks = append(tasks, result.task)
+		i += result.consumed
+	}
+
+	return tasks
+}
+
+// parseSingleTask 解析单个任务（path + 可选参数）
+// 返回解析结果和消耗的参数数量
+func parseSingleTask(args []string, defaultLvl int) taskParseResult {
+	if len(args) == 0 {
+		return taskParseResult{consumed: 0}
+	}
+
+	path := args[0]
+	consumed := 1
+
+	// 解析可选参数
+	opts := parseTaskOptions(args[1:], defaultLvl)
+	consumed += opts.consumed
+
+	// 构建任务
+	reportName := opts.reportName
+	if reportName == "" {
+		reportName = resolveDirectoryName(path)
+	}
+
+	return taskParseResult{
+		task: ReviewTask{
+			Path:       path,
+			ReportName: reportName,
+			Level:      opts.level,
+		},
+		consumed: consumed,
+	}
+}
+
+// taskOptions 表示任务的可选参数
+type taskOptions struct {
+	level      int
+	reportName string
+	consumed   int // 消耗的参数数量
+}
+
+// parseTaskOptions 解析任务的可选参数（level 和 reportName）
+func parseTaskOptions(args []string, defaultLvl int) taskOptions {
+	opts := taskOptions{
+		level:    defaultLvl,
+		consumed: 0,
+	}
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		// 如果遇到有效路径，说明是下一个任务的开始
+		if isValidPath(arg) {
+			break
+		}
+
+		// 尝试解析为 level
+		if lvl, err := strconv.Atoi(arg); err == nil && isValidLevel(lvl) {
+			opts.level = lvl
+		} else {
+			// 否则作为 reportName
+			opts.reportName = arg
+		}
+
+		opts.consumed++
+	}
+
+	return opts
+}
+
+// isValidLevel 检查 level 是否在有效范围内
+func isValidLevel(level int) bool {
+	return level >= minLevel && level <= maxLevel
+}
+
+// getReportName 获取报告名称，优先使用用户指定的，否则从目录名解析
+func getReportName(cmd *cobra.Command, path string) string {
+	rn := viper.GetString("report_name")
+	if rn == "" {
+		rn, _ = cmd.Flags().GetString("rn")
+	}
+	if rn == "" {
+		rn = resolveDirectoryName(path)
+	}
+	return rn
+}
+
+// getValidLevel 确保 level 在有效范围内
+func getValidLevel(level int) int {
+	if level < minLevel || level > maxLevel {
+		return defaultLevel
+	}
+	return level
+}
+
+// runReviewTask 执行单个审查任务
+func runReviewTask(ctx context.Context, task ReviewTask) error {
+	// 1. 加载配置
+	cfg := loadReviewConfig()
+
+	// 2. 初始化扫描器
+	scn, err := scanner.NewScanner(task.Path, cfg.IncludeExts)
 	if err != nil {
-		return fmt.Errorf("initializing scanner: %w", err)
+		return fmt.Errorf("初始化扫描器失败: %w", err)
 	}
 
 	files, err := scn.Scan()
 	if err != nil {
-		return fmt.Errorf("scanning directory: %w", err)
+		return fmt.Errorf("扫描目录失败: %w", err)
 	}
 
 	if len(files) == 0 {
-		fmt.Printf("🎉 No files to review in %s. Skipping.\n", targetDir)
+		fmt.Printf("🎉 目录 %s 中没有需要审查的文件\n", task.Path)
 		return nil
 	}
 
-	// 3. Initialize LLM Client & Engine
-	client := llm.NewClient(apiKey, model, baseURL)
-	engine := reviewer.NewEngine(client, concurrency, level)
+	// 3. 初始化 LLM 客户端和引擎
+	client, err := llm.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL)
+	if err != nil {
+		return fmt.Errorf("初始化 LLM 客户端失败: %w", err)
+	}
 
-	// 4. Initialize TUI Program
+	engine, err := reviewer.NewEngine(client, cfg.Concurrency, task.Level)
+	if err != nil {
+		return fmt.Errorf("初始化引擎失败: %w", err)
+	}
+
+	// 4. 启动 TUI 和后台任务
+	return runWithTUI(ctx, engine, files, task)
+}
+
+// reviewConfig 封装审查配置
+type reviewConfig struct {
+	APIKey      string
+	Model       string
+	BaseURL     string
+	Concurrency int
+	IncludeExts []string
+}
+
+// loadReviewConfig 从 Viper 加载配置
+func loadReviewConfig() reviewConfig {
+	concurrency := viper.GetInt("concurrency")
+	if concurrency <= 0 {
+		concurrency = defaultConcurrency
+	}
+
+	return reviewConfig{
+		APIKey:      viper.GetString("api_key"),
+		Model:       viper.GetString("model"),
+		BaseURL:     viper.GetString("base_url"),
+		Concurrency: concurrency,
+		IncludeExts: viper.GetStringSlice("include_exts"),
+	}
+}
+
+// runWithTUI 启动 TUI 界面并执行审查
+func runWithTUI(ctx context.Context, engine *reviewer.Engine, files []string, task ReviewTask) error {
 	p := tea.NewProgram(ui.NewModel(len(files)))
-
-	// Channel to signal completion or error from goroutine
 	doneCh := make(chan error, 1)
 
-	// 5. Run Logic in Background
+	// 后台执行审查逻辑
 	go func() {
-		ctx, cancel := context.WithCancel(context.Background())
+		taskCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
 		startTime := time.Now()
-		results := engine.Start(ctx, files)
+		results := engine.Start(taskCtx, files)
 
 		var allResults []reviewer.Result
 		var issuesCount int
 
-		// Consume results
 		for res := range results {
-			// Send progress update to TUI
 			p.Send(ui.CurrentFileMsg(res.FilePath))
-
 			allResults = append(allResults, res)
 			if res.Review != nil {
 				issuesCount += len(res.Review.Issues)
@@ -180,16 +316,13 @@ func runReviewTask(targetDir, reportName string, level int) error {
 
 		duration := time.Since(startTime)
 
-		// Generate Report
-		reportPath, err := reviewer.GenerateMarkdownReport(allResults, duration, "reports", reportName, level)
-		reportMsg := ""
+		// 生成报告
+		reportPath, err := reviewer.GenerateMarkdownReport(allResults, duration, "reports", task.ReportName, task.Level)
+		reportMsg := reportPath
 		if err != nil {
-			reportMsg = fmt.Sprintf("Error: %v", err)
-		} else {
-			reportMsg = reportPath
+			reportMsg = fmt.Sprintf("报告生成失败: %v", err)
 		}
 
-		// Send completion message to TUI
 		p.Send(ui.DoneMsg{
 			Duration:    duration,
 			ReportPath:  reportMsg,
@@ -199,37 +332,48 @@ func runReviewTask(targetDir, reportName string, level int) error {
 		doneCh <- err
 	}()
 
-	// 6. Start TUI
-	// Note: p.Run() blocks until the program finishes
+	// 启动 TUI（阻塞）
 	if _, err := p.Run(); err != nil {
-		return fmt.Errorf("running TUI: %w", err)
+		return fmt.Errorf("TUI 运行失败: %w", err)
 	}
 
-	// Wait for background task to confirm it's really done (mostly for error propagation)
-	return <-doneCh
+	// 等待后台任务完成，同时监听 ctx 取消（防止阻塞）
+	select {
+	case err := <-doneCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func init() {
 	rootCmd.AddCommand(runCmd)
 
-	// Flags
-	runCmd.Flags().StringSlice("include", []string{}, "Only include files with these extensions")
-	runCmd.Flags().Int("concurrency", 5, "Number of concurrent workers")
-	runCmd.Flags().String("base-url", "https://api.deepseek.com/v1", "API Base URL (for DeepSeek/LocalAI)")
-	runCmd.Flags().String("report-name", "", "Custom name for the generated report (optional)")
-	runCmd.Flags().String("rn", "", "Alias for --report-name")
-	runCmd.Flags().Int("l", 3, "Review strictness level (1-6, higher = stricter)")
+	// 注册命令行参数
+	runCmd.Flags().StringSlice("include", []string{}, "仅包含指定扩展名的文件")
+	runCmd.Flags().Int("concurrency", defaultConcurrency, "并发 Worker 数量")
+	runCmd.Flags().String("base-url", "https://api.deepseek.com/v1", "API 地址")
+	runCmd.Flags().String("report-name", "", "自定义报告名称")
+	runCmd.Flags().String("rn", "", "--report-name 的别名")
+	runCmd.Flags().Int("l", defaultLevel, "审查严格级别 (1-6)")
 
-	// Bind Viper
-	viper.BindPFlag("include_exts", runCmd.Flags().Lookup("include"))
-	viper.BindPFlag("concurrency", runCmd.Flags().Lookup("concurrency"))
-	viper.BindPFlag("base_url", runCmd.Flags().Lookup("base-url"))
-	viper.BindPFlag("report_name", runCmd.Flags().Lookup("report-name"))
-	viper.BindPFlag("level", runCmd.Flags().Lookup("l"))
+	// 绑定到 Viper
+	mustBindPFlag("include_exts", runCmd.Flags().Lookup("include"))
+	mustBindPFlag("concurrency", runCmd.Flags().Lookup("concurrency"))
+	mustBindPFlag("base_url", runCmd.Flags().Lookup("base-url"))
+	mustBindPFlag("report_name", runCmd.Flags().Lookup("report-name"))
+	mustBindPFlag("level", runCmd.Flags().Lookup("l"))
 }
 
-// isDirectory 检查给定路径是否是一个存在的目录
-func isDirectory(path string) bool {
+// mustBindPFlag 绑定 flag 到 viper，失败时 panic
+func mustBindPFlag(key string, flag *pflag.Flag) {
+	if err := viper.BindPFlag(key, flag); err != nil {
+		panic(fmt.Sprintf("绑定 flag %s 失败: %v", key, err))
+	}
+}
+
+// isValidPath 检查参数是否是一个有效的目录路径
+func isValidPath(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil {
 		return false
@@ -237,20 +381,16 @@ func isDirectory(path string) bool {
 	return info.IsDir()
 }
 
-// resolveDirectoryName 解析目录路径，返回实际的目录名称
-// 例如 "." -> "go-ai-reviewer", "./src" -> "src"
+// resolveDirectoryName 解析目录路径为实际名称
 func resolveDirectoryName(path string) string {
-	// 处理 "." 或 "./" 的情况
 	if path == "." || path == "./" {
-		// 获取当前工作目录的绝对路径
 		absPath, err := filepath.Abs(path)
 		if err != nil {
-			return "project" // fallback
+			return "project"
 		}
 		return filepath.Base(absPath)
 	}
 
-	// 其他情况，先获取绝对路径再取 base
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return filepath.Base(path)

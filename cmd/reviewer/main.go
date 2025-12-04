@@ -1,3 +1,4 @@
+// Package main 是 Go AI Code Reviewer 的入口点
 package main
 
 import (
@@ -8,20 +9,30 @@ import (
 	"github.com/spf13/viper"
 )
 
-var (
-	cfgFile string
-	rootCmd = &cobra.Command{
-		Use:   "reviewer",
-		Short: "Go AI Code Reviewer - Your automated code auditing assistant",
-		Long: `Go AI Code Reviewer is a CLI tool designed to help developers audit their code 
-using Large Language Models. It provides static analysis, security checks, 
-and optimization suggestions.`,
-		// Uncomment the following line if your bare application
-		// has an action associated with it:
-		// Run: func(cmd *cobra.Command, args []string) { },
-	}
+// 配置文件名常量
+const (
+	configFileName = ".code-review"
+	configFileType = "yaml"
+	defaultModel   = "deepseek-chat"
 )
 
+// 配置文件路径（通过 --config 指定）
+var cfgFile string
+
+// rootCmd 是根命令
+var rootCmd = &cobra.Command{
+	Use:   "reviewer",
+	Short: "Go AI Code Reviewer - 智能代码审查助手",
+	Long: `Go AI Code Reviewer 是一个基于 LLM 的命令行代码审查工具。
+它可以自动扫描代码、检测潜在问题、提供优化建议。
+
+使用示例:
+  reviewer run .              # 审查当前目录
+  reviewer run ./src --l 5    # 使用严格模式审查
+  reviewer run ./a 3 ./b 5    # 批量审查多个目录`,
+}
+
+// Execute 执行根命令
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -32,38 +43,42 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.code-review.yaml)")
+	// 全局 Flags
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "配置文件路径 (默认: $HOME/.code-review.yaml)")
+	rootCmd.PersistentFlags().String("api-key", "", "LLM API Key (或通过环境变量 OPENAI_API_KEY 设置)")
+	rootCmd.PersistentFlags().String("model", defaultModel, "使用的 LLM 模型")
 
-	// Global flags
-	rootCmd.PersistentFlags().String("api-key", "", "OpenAI API Key")
-	rootCmd.PersistentFlags().String("model", "gpt-4", "LLM Model to use")
-
-	// Bind flags to viper
-	viper.BindPFlag("api_key", rootCmd.PersistentFlags().Lookup("api-key"))
-	viper.BindPFlag("model", rootCmd.PersistentFlags().Lookup("model"))
+	// 绑定到 Viper（init 阶段失败应该 panic，使用 run.go 中的 mustBindPFlag）
+	mustBindPFlag("api_key", rootCmd.PersistentFlags().Lookup("api-key"))
+	mustBindPFlag("model", rootCmd.PersistentFlags().Lookup("model"))
 }
 
+// initConfig 初始化配置
 func initConfig() {
+	// 统一设置配置文件类型
+	viper.SetConfigType(configFileType)
+
 	if cfgFile != "" {
-		// Use config file from the flag.
+		// 使用指定的配置文件
 		viper.SetConfigFile(cfgFile)
 	} else {
-		// Find home directory.
-		home, err := os.UserHomeDir()
-		cobra.CheckErr(err)
-
-		// Search config in home directory with name ".code-review" (without extension).
-		viper.AddConfigPath(home)
+		// 查找默认配置文件位置
+		if home, err := os.UserHomeDir(); err == nil {
+			viper.AddConfigPath(home)
+		}
 		viper.AddConfigPath(".")
-		viper.SetConfigType("yaml")
-		viper.SetConfigName(".code-review")
+		viper.SetConfigName(configFileName)
 	}
 
-	viper.AutomaticEnv() // read in environment variables that match
+	// 自动读取环境变量
+	viper.AutomaticEnv()
 
-	// If a config file is found, read it in.
-	if err := viper.ReadInConfig(); err == nil {
-		fmt.Println("Using config file:", viper.ConfigFileUsed())
+	// 读取配置文件（文件不存在不报错，但格式错误需要提示）
+	if err := viper.ReadInConfig(); err != nil {
+		// 只有当配置文件存在但读取失败时才报错
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			fmt.Fprintf(os.Stderr, "⚠️ 配置文件读取失败: %v\n", err)
+		}
 	}
 }
 

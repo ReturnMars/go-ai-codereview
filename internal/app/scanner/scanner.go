@@ -1,3 +1,4 @@
+// Package scanner 提供文件系统扫描和过滤功能
 package scanner
 
 import (
@@ -11,92 +12,151 @@ import (
 	ignore "github.com/sabhiram/go-gitignore"
 )
 
+// 默认排除的目录名（精确匹配目录名，非路径）
+var defaultExcludeDirs = map[string]struct{}{
+	".git":         {},
+	"node_modules": {},
+	"dist":         {},
+	"vendor":       {},
+	".idea":        {},
+	".vscode":      {},
+	".DS_Store":    {},
+	"__pycache__":  {},
+	".cache":       {},
+	"build":        {},
+}
+
 // Scanner 负责文件扫描和过滤
 type Scanner struct {
-	RootPath     string
-	GitIgnore    *ignore.GitIgnore
-	IncludeExts  []string
-	ExcludePaths []string // 硬编码的黑名单
+	rootPath    string
+	gitIgnore   *ignore.GitIgnore
+	includeExts map[string]struct{} // 使用 map 提高查找效率
+	excludeDirs map[string]struct{} // 排除的目录名（非路径）
+}
+
+// Option 定义 Scanner 的配置选项
+type Option func(*Scanner)
+
+// WithExcludeDirs 添加额外的排除目录
+func WithExcludeDirs(dirs []string) Option {
+	return func(s *Scanner) {
+		for _, dir := range dirs {
+			s.excludeDirs[dir] = struct{}{}
+		}
+	}
 }
 
 // NewScanner 创建一个新的 Scanner 实例
-func NewScanner(root string, includeExts []string) (*Scanner, error) {
-	// 默认黑名单，强制跳过
-	defaultExcludes := []string{
-		".git", "node_modules", "dist", "vendor", ".idea", ".vscode", ".DS_Store",
+func NewScanner(root string, includeExts []string, opts ...Option) (*Scanner, error) {
+	// 验证根目录是否存在
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fs.ErrInvalid
 	}
 
-	// 尝试加载 .gitignore
-	var gitIgnore *ignore.GitIgnore
+	// 初始化排除目录（复制默认值）
+	excludeDirs := make(map[string]struct{}, len(defaultExcludeDirs))
+	for k, v := range defaultExcludeDirs {
+		excludeDirs[k] = v
+	}
+
+	// 转换扩展名列表为 map
+	extMap := make(map[string]struct{}, len(includeExts))
+	for _, ext := range includeExts {
+		// 确保扩展名以 . 开头
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		extMap[strings.ToLower(ext)] = struct{}{}
+	}
+
+	s := &Scanner{
+		rootPath:    root,
+		includeExts: extMap,
+		excludeDirs: excludeDirs,
+	}
+
+	// 应用选项
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	// 尝试加载 .gitignore（可选，失败不影响扫描）
 	gitIgnorePath := filepath.Join(root, ".gitignore")
 	if _, err := os.Stat(gitIgnorePath); err == nil {
-		gitIgnore, _ = ignore.CompileIgnoreFile(gitIgnorePath)
+		if gi, err := ignore.CompileIgnoreFile(gitIgnorePath); err == nil {
+			s.gitIgnore = gi
+		}
+		// 如果 .gitignore 解析失败，静默忽略，不影响扫描
 	}
 
-	return &Scanner{
-		RootPath:     root,
-		GitIgnore:    gitIgnore,
-		IncludeExts:  includeExts,
-		ExcludePaths: defaultExcludes,
-	}, nil
+	return s, nil
 }
 
 // Scan 执行扫描并返回文件列表
 func (s *Scanner) Scan() ([]string, error) {
 	var files []string
 
-	err := filepath.WalkDir(s.RootPath, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(s.rootPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
-		}
-
-		// 1. 获取相对路径
-		relPath, err := filepath.Rel(s.RootPath, path)
-		if err != nil {
+			// 跳过无法访问的文件/目录，继续扫描
 			return nil
 		}
 
-		// 2. 检查硬编码黑名单
-		for _, exclude := range s.ExcludePaths {
-			if strings.Contains(relPath, exclude) {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
+		// 1. 获取相对路径
+		relPath, err := filepath.Rel(s.rootPath, path)
+		if err != nil {
+			return nil // 跳过无法获取相对路径的文件
 		}
 
-		// 3. 检查 .gitignore
-		if s.GitIgnore != nil && s.GitIgnore.MatchesPath(relPath) {
+		// 2. 跳过根目录自身
+		if relPath == "." {
+			return nil
+		}
+
+		// 3. 检查是否是符号链接（跳过以避免循环）
+		if d.Type()&fs.ModeSymlink != 0 {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		// 4. 跳过目录，只处理文件
+		// 4. 检查目录名是否在排除列表中
+		baseName := d.Name()
+		if _, excluded := s.excludeDirs[baseName]; excluded {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// 5. 检查 .gitignore 规则
+		if s.gitIgnore != nil && s.gitIgnore.MatchesPath(relPath) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// 6. 跳过目录，只处理文件
 		if d.IsDir() {
 			return nil
 		}
 
-		// 5. 检查文件后缀 (如果指定了白名单)
-		if len(s.IncludeExts) > 0 {
+		// 7. 检查文件扩展名（如果设置了白名单）
+		if len(s.includeExts) > 0 {
 			ext := strings.ToLower(filepath.Ext(path))
-			found := false
-			for _, target := range s.IncludeExts {
-				if ext == target {
-					found = true
-					break
-				}
-			}
-			if !found {
+			if _, ok := s.includeExts[ext]; !ok {
 				return nil
 			}
 		}
 
-		// 6. 检查是否为二进制文件
-		isBinary, err := isBinaryFile(path)
-		if err != nil || isBinary {
+		// 8. 检查是否为二进制文件
+		if isBinary, _ := isBinaryFile(path); isBinary {
 			return nil
 		}
 
@@ -107,7 +167,8 @@ func (s *Scanner) Scan() ([]string, error) {
 	return files, err
 }
 
-// isBinaryFile 检测文件是否为二进制文件 (读取前 512 字节)
+// isBinaryFile 检测文件是否为二进制文件
+// 通过检查前 512 字节是否包含 NULL 字符来判断
 func isBinaryFile(path string) (bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -115,18 +176,12 @@ func isBinaryFile(path string) (bool, error) {
 	}
 	defer f.Close()
 
-	// 读取前 512 字节
 	buffer := make([]byte, 512)
 	n, err := f.Read(buffer)
 	if err != nil && err != io.EOF {
 		return false, err
 	}
 
-	// 如果包含 0x00 (NULL byte)，则认为是二进制文件
-	// 也可以使用 http.DetectContentType，但 NULL byte 检查更高效且适用于代码文件判断
-	if bytes.IndexByte(buffer[:n], 0) != -1 {
-		return true, nil
-	}
-
-	return false, nil
+	// 包含 NULL 字符则认为是二进制文件
+	return bytes.IndexByte(buffer[:n], 0) != -1, nil
 }
