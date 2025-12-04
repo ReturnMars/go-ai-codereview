@@ -18,7 +18,7 @@ const (
 	// DefaultConcurrency 是默认的并发数
 	DefaultConcurrency = 5
 	// DefaultLevel 是默认的审查级别
-	DefaultLevel = 3
+	DefaultLevel = 2
 	// MinLevel 是最小审查级别
 	MinLevel = 1
 	// MaxLevel 是最大审查级别
@@ -92,8 +92,8 @@ func (e *Engine) Start(ctx context.Context, files []string) <-chan Result {
 
 	// 消费者：Worker Pool
 	var wg sync.WaitGroup
+	wg.Add(e.concurrency)
 	for i := 0; i < e.concurrency; i++ {
-		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			e.worker(ctx, jobs, results)

@@ -24,7 +24,7 @@ import (
 // 常量定义
 const (
 	defaultConcurrency = 5
-	defaultLevel       = 3
+	defaultLevel       = 2
 	minLevel           = 1
 	maxLevel           = 6
 )

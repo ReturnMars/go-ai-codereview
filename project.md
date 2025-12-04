@@ -2,12 +2,27 @@
 
 ## Status Overview
 - **Phase:** Production / Maintenance
-- **Current State:** Feature-complete CLI with strictness levels, batch mode, and smart path resolution.
-- **Last Update:** Phase 5.3 - Strictness Level & Path Resolution
+- **Current State:** Feature-complete CLI with optimized prompts and enhanced robustness.
+- **Last Update:** Phase 6 - Deep Optimization & Refactoring
 
 ---
 
 ## Implementation History
+
+### [Date] Phase 6: Deep Optimization & Refactoring
+- **Prompt Engineering:**
+  - 优化 LLM 系统提示词，减少误报（跨文件依赖、框架设计模式）
+  - 支持多语言审查（Go, Java, JavaScript, TypeScript, Python, Vue, React）
+  - 强调"只报告 100% 确定的问题"
+- **Code Refactoring:**
+  - 拆分 `parseMultiPathArgs` 为多个单一职责函数（`parseSingleTask`, `parseTaskOptions`, `isValidLevel`）
+  - 修复 `initConfig` 中 ConfigType 设置问题
+  - 修复 `runWithTUI` 潜在竞态条件（使用 select 监听 ctx.Done）
+  - 修复 `isValidPath` 只检查目录而非文件
+  - 优化 WaitGroup 使用（`wg.Add` 移到循环外）
+- **Configuration:**
+  - 默认审查级别从 3 改为 2（基础模式）
+- **Status:** Code quality improved, reduced false positives in reviews.
 
 ### [Date] Phase 5.3: Strictness Level & Path Resolution
 - **Action:** Fixed `run .` generating report name as "." instead of actual directory name.
@@ -23,7 +38,7 @@
 - **Action:** Added level support to batch mode (per-path level specification).
 - **Levels:**
   - Level 1: 宽松模式 - 只关注严重问题
-  - Level 3: 标准模式 - 常规审查标准 (默认)
+  - Level 2: 基础模式 - 关注明显错误 (默认)
   - Level 6: 极致模式 - 顶级开源项目标准
 
 ### [Date] Phase 5.1: CLI Enhancements

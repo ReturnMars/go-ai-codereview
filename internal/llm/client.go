@@ -17,7 +17,7 @@ const (
 	DefaultTemperature = 0.2
 	MinLevel           = 1
 	MaxLevel           = 6
-	DefaultLevel       = 3
+	DefaultLevel       = 2
 )
 
 // 系统提示模板

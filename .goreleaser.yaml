@@ -8,7 +8,7 @@ before:
 
 builds:
   - id: reviewer
-    main: ./cmd/reviewer/main.go
+    main: ./cmd/reviewer
     binary: reviewer
     env:
       - CGO_ENABLED=0
