@@ -2,12 +2,21 @@
 
 ## Status Overview
 - **Phase:** Production / Maintenance
-- **Current State:** Feature-complete CLI with interactive config and enhanced UX.
-- **Last Update:** Phase 7 - Interactive Config Initialization
+- **Current State:** Feature-complete CLI with interactive config, install helper, and enhanced UX.
+- **Last Update:** Phase 8 - Install Command
 
 ---
 
 ## Implementation History
+
+### [Date] Phase 8: Install Helper
+- **Action:** 新增 `install` 子命令，简化环境变量配置。
+- **Behavior:**
+  - 自动检测当前 exe 路径。
+  - Windows: 使用 PowerShell 修改用户级 PATH 环境变量。
+  - Linux/Mac: 自动识别 Shell 配置文件 (`.bashrc`/`.zshrc`) 并追加 `export PATH`。
+  - 幂等设计：若路径已存在则跳过。
+- **UX Improvement:** 用户无需手动修改系统环境变量，真正做到“下载即用”。
 
 ### [Date] Phase 7: Interactive Config Initialization
 - **Action:** 实现交互式配置初始化功能
