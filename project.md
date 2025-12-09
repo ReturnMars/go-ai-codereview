@@ -2,12 +2,24 @@
 
 ## Status Overview
 - **Phase:** Production / Maintenance
-- **Current State:** Feature-complete CLI with optimized prompts and enhanced robustness.
-- **Last Update:** Phase 6 - Deep Optimization & Refactoring
+- **Current State:** Feature-complete CLI with interactive config and enhanced UX.
+- **Last Update:** Phase 7 - Interactive Config Initialization
 
 ---
 
 ## Implementation History
+
+### [Date] Phase 7: Interactive Config Initialization
+- **Action:** 实现交互式配置初始化功能
+- **Behavior:**
+  - 首次运行时，若未检测到 `api_key`，自动引导用户输入
+  - 提示输入 `base_url`（有默认值：`https://api.deepseek.com/v1`）
+  - 提示输入 `api_key`（必填）
+  - 自动创建配置文件到 `~/.code-review.yaml`
+- **Changes:**
+  - 修改 `cmd/reviewer/run.go` 中 `validateConfig()` 函数
+  - 新增 `saveConfig()` 辅助函数
+- **UX Improvement:** 用户无需手动创建配置文件，开箱即用体验。
 
 ### [Date] Phase 6: Deep Optimization & Refactoring
 - **Prompt Engineering:**

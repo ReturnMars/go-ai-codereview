@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,7 +19,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
@@ -89,12 +90,109 @@ func executeRun(cmd *cobra.Command, args []string) {
 	}
 }
 
-// validateConfig 校验必要的配置项
+// validateConfig 校验必要的配置项，缺失时引导用户交互式配置
 func validateConfig() error {
 	apiKey := viper.GetString("api_key")
-	if apiKey == "" {
-		return fmt.Errorf("API Key 未设置，请通过环境变量或配置文件设置 OPENAI_API_KEY")
+	if apiKey != "" {
+		return nil
 	}
+
+	// 配置缺失，引导用户交互式输入
+	fmt.Println("🔧 首次使用，需要配置 API 信息")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	reader := bufio.NewReader(os.Stdin)
+
+	// 输入 Base URL（可选，有默认值）
+	defaultBaseURL := "https://api.deepseek.com/v1"
+	fmt.Printf("📡 API Base URL [%s]: ", defaultBaseURL)
+	baseURL, _ := reader.ReadString('\n')
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
+
+	// 输入 API Key（必填）
+	fmt.Print("🔑 API Key (必填): ")
+	apiKey, _ = reader.ReadString('\n')
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return fmt.Errorf("API Key 不能为空")
+	}
+
+	// 保存配置到 ~/.code-review.yaml
+	if err := saveConfig(baseURL, apiKey); err != nil {
+		return fmt.Errorf("保存配置失败: %w", err)
+	}
+
+	// 更新内存中的配置
+	viper.Set("api_key", apiKey)
+	viper.Set("base_url", baseURL)
+
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("✅ 配置已保存到 ~/.code-review.yaml")
+	fmt.Println()
+
+	return nil
+}
+
+// saveConfig 将配置保存到用户主目录下的配置文件
+func saveConfig(baseURL, apiKey string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("获取用户主目录失败: %w", err)
+	}
+
+	configPath := filepath.Join(home, ".code-review.yaml")
+
+	// 构建配置内容
+	configContent := fmt.Sprintf(`# Go AI Code Reviewer 配置文件
+# 由工具自动生成
+
+# API 配置
+base_url: "%s"
+api_key: "%s"
+
+# 模型配置
+model: "deepseek-chat"
+
+# 默认并发数
+concurrency: 5
+
+# 默认审查级别 (1-6)
+level: 2
+
+# 包含的文件扩展名（仅审查以下类型的代码文件）
+# 配置文件（json/yaml/md）已排除，无需代码审查
+include_exts:
+  - .go
+  - .py
+  - .java
+  - .php
+  - .js
+  - .ts
+  - .vue
+  - .jsx
+  - .tsx
+  - .rs
+  - .rb
+  - .swift
+  - .kt
+  - .c
+  - .cpp
+  - .h
+  - .hpp
+  - .cs
+  - .lua
+  - .pl
+  - .sh
+  - .sql
+`, baseURL, apiKey)
+
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+		return fmt.Errorf("写入配置文件失败: %w", err)
+	}
+
 	return nil
 }
 
@@ -363,13 +461,6 @@ func init() {
 	mustBindPFlag("base_url", runCmd.Flags().Lookup("base-url"))
 	mustBindPFlag("report_name", runCmd.Flags().Lookup("report-name"))
 	mustBindPFlag("level", runCmd.Flags().Lookup("l"))
-}
-
-// mustBindPFlag 绑定 flag 到 viper，失败时 panic
-func mustBindPFlag(key string, flag *pflag.Flag) {
-	if err := viper.BindPFlag(key, flag); err != nil {
-		panic(fmt.Sprintf("绑定 flag %s 失败: %v", key, err))
-	}
 }
 
 // isValidPath 检查参数是否是一个有效的目录路径

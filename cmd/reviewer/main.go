@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
@@ -48,9 +49,16 @@ func init() {
 	rootCmd.PersistentFlags().String("api-key", "", "LLM API Key (或通过环境变量 OPENAI_API_KEY 设置)")
 	rootCmd.PersistentFlags().String("model", defaultModel, "使用的 LLM 模型")
 
-	// 绑定到 Viper（init 阶段失败应该 panic，使用 run.go 中的 mustBindPFlag）
+	// 绑定到 Viper（init 阶段失败应该 panic）
 	mustBindPFlag("api_key", rootCmd.PersistentFlags().Lookup("api-key"))
 	mustBindPFlag("model", rootCmd.PersistentFlags().Lookup("model"))
+}
+
+// mustBindPFlag 绑定 flag 到 viper，失败时 panic
+func mustBindPFlag(key string, flag *pflag.Flag) {
+	if err := viper.BindPFlag(key, flag); err != nil {
+		panic(fmt.Sprintf("绑定 flag %s 失败: %v", key, err))
+	}
 }
 
 // initConfig 初始化配置
