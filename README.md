@@ -21,7 +21,21 @@ git clone https://github.com/yourusername/go-ai-reviewer.git
 cd go-ai-reviewer
 go mod tidy
 go build -o reviewer cmd/reviewer/main.go
+./reviewer install  # (可选) 将工具添加到系统 PATH，随时随地使用
 ```
+
+### ⚡ 快速安装 (从 Release 下载)
+
+1.  从 [GitHub Releases](https://github.com/ReturnMars/go-ai-codereview/releases) 下载对应平台的压缩包。
+2.  解压后运行：
+    ```bash
+    # Windows
+    .\reviewer.exe install
+
+    # Linux/Mac
+    ./reviewer install
+    ```
+3.  重启终端即可全局使用 `reviewer` 命令。
 
 ## 🛠️ 配置 (Configuration)
 
